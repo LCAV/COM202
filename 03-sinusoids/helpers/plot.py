@@ -10,6 +10,7 @@ def tdplot(s, fs, name, plottitle):
     fig, axs = plt.subplots(constrained_layout=True)
     axs.plot(t, s) 
     axs.set(xlabel='t [s]', ylabel=name+'(t)')
+    
     plt.show()
 
     return
