@@ -61,7 +61,7 @@ def compute_mask(X):
         weight += np.power(10, tonal.spl[j] / 10) * (table.bark[table.map[j]] - i)
     if msum > DBMIN:
       index  = weight/np.power(10, msum / 10.0)
-      center = table.cbound[i] + np.int(index * (table.cbound[i+1] - table.cbound[i])) 
+      center = table.cbound[i] + int(index * (table.cbound[i+1] - table.cbound[i])) 
       if tonal.flag[center] == TONE:
         center += 1
       tonal.flag[center] = NOISE
