@@ -4,8 +4,6 @@
 import sys
 import numpy as np
 
-
-
 FRAME_SIZE = 512             # Input buffer size
 FFT_SIZE   = 512             # FFT number of points
 N_SUBBANDS =  32             # Number of subbands

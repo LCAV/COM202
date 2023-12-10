@@ -1,10 +1,6 @@
 # %%
-from scipy.io import wavfile
-import numpy as np
-import sounddevice as sd
 import numpy as np
 from scipy.io import wavfile
-import sounddevice as sd
 import scipy.signal as sgn
 import matplotlib.pyplot as plt
 import psychoacoustic
