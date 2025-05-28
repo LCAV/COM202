@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pole-Zero plot</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+    }
+
+    h4 {
+      font-weight: normal;
+      text-align: center;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: max-content max-content max-content;
+    }
+
+    .unit-circle {
+      fill: #f6f6f6;
+      stroke: #ccc;
+      stroke-width: 1px;
+    }
+
+    .shaded {
+      fill: #f6f6f6;
+      stroke: none;
+    }
+
+    .axis path,
+    .axis line {
+      fill: none;
+      stroke: #ccc;
+    }
+
+    .axis > text {
+      fill: #333;
+      font-size: 12px;
+      cursor: default;
+    }
+
+    .zero circle, .conjugate-zero circle {
+      stroke: darkslateblue;
+      stroke-width: 2px;
+      fill: transparent;
+    }
+
+    .pole.unstable line, .conjugate-pole.unstable line {
+      stroke: red;
+      stroke-width: 2px;
+    }
+	
+    .pole line, .conjugate-pole line {
+      stroke: darkslateblue;
+      stroke-width: 2px;
+    }
+
+
+    .strength {
+      font-size: 12px;
+      fill: darkslateblue;
+    }
+
+    .magnitude {
+      stroke: darkorange;
+      stroke-width: 2px;
+      fill: none;
+      stroke-linejoin: round;
+    }
+
+    .magnitude-area {
+      fill: orange;
+      fill-opacity: 0.2;
+      stroke-width: 0;
+    }
+
+    .phase {
+      fill: none;
+      stroke: darkorchid;
+      stroke-width: 2px;
+      stroke-linejoin: round;
+    }
+
+    .menu {
+      position: fixed;
+      overflow: hidden;
+      width: 50px;
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      border-radius: 5px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    }
+
+    .menu li {
+      list-style: none;
+      margin: 0;
+    }
+
+    .menu button {
+      display: block;
+      cursor: pointer;
+      text-align: left;
+      padding: 3px 8px;
+      width: 100%;
+      background: none;
+      border: none;
+    }
+
+    .menu button:hover {
+      background: #BBDEFB;
+    }
+
+    .edit-menu {
+      width: 100px;
+    }
+
+    .edit-menu input {
+      box-sizing: border-box;
+      width: calc(100% - 5px);
+      margin: 2px;
+    }
+
+  </style>
+</head>
+<body>
+  <menu id="add-menu" class="menu" style="display: none;">
+    <li><button data-choice="pole">Pole</button></li>
+    <li><button data-choice="zero">Zero</button></li>
+  </menu>
+
+  <menu id="edit-menu" class="menu edit-menu" style="display: none;">
+    <li><input id="menu-strength" type="number" min="1" max="5" value="1" /></li>
+    <li><button id="menu-remove">Remove</button></li>
+  </menu>
+
+  <div class="grid">
+    <div>
+      <h4>Pole-Zero</h4>
+      <svg id="pole-zero"></svg>
+      <div>
+        <button id="clear-btn">Clear</button>
+      </div>
+    </div>
+    <div>
+      <h4>Magnitude (normalized)</h4>
+      <svg id="magnitude"></svg>
+    </div>
+    <div>
+      <h4>Phase</h4>
+      <svg id="phase"></svg>
+    </div>
+  </div>
+  <svg id="timeplot"></svg>
+  <script>
+
+    const uniqueGenerator = (prefix = '') => {
+      let number = 1
+      return () => {
+        number += 1
+        return `${prefix}${number}`
+      }
+    }
+
+    const unique = uniqueGenerator('polezero-')
+
+    const pole = (x, y, strength) => ({
+      x, y, strength, mag: x * x + y * y, type: 'pole', key: unique(),
+    })
+
+    const zero = (x, y, strength) => ({
+      x, y, strength, mag: x * x + y * y, type: 'zero', key: unique(),
+    })
+
+    const conjugate = (z) => ({...z, y: -z.y})
+
+    const distance = (x1, y1, x2=0, y2=0) => Math.sqrt((x1-x2)*(x1-x2) + (y1-y2)*(y1-y2))
+
+    const angle = (x, y) => Math.atan2(y, x)
+
+    const snap = (value, to=0, delta=0.1) => Math.abs(value - to) > delta ? value : to
+
+    const limitToUnitCircle = (x, y) => {
+      const amp = x*x + y*y
+      if (amp >= 1) {
+        const ang = Math.atan2(y, x)
+        x = Math.cos(ang)
+        y = Math.sin(ang)
+      }
+      return [x, y]
+    }
+
+    const decibel = (value) => 20 * Math.log(value) / Math.LN10
+
+    const magnitude = (freq, zeros, poles) => {
+      // e^j⍵
+      const x = Math.cos(freq)
+      const y = Math.sin(freq)
+      let numerator = 1
+      let denominator = 1
+
+      // |e^j⍵ - pole|
+      for (let p of poles) {
+		if (p.mag >= 1) return [freq, 0]
+        denominator *= Math.pow(distance(x, y, p.x, p.y), p.strength)
+        denominator *= Math.pow(distance(x, y, p.x, -p.y), p.strength) // conjugate
+      }
+	  
+      // |e^j⍵ - zero|
+      for (let z of zeros) {
+        numerator *= Math.pow(distance(x, y, z.x, z.y), z.strength)
+        numerator *= Math.pow(distance(x, y, z.x, -z.y), z.strength) // conjugate
+      }
+
+
+      let mag = numerator / denominator
+      if (isNaN(mag)) mag = 1 // 0/0
+
+      return [freq, mag]
+    }
+
+    const unwrap = (p) => {
+      while (p > Math.PI) p -= 2*Math.PI
+      while (p < -Math.PI) p += 2*Math.PI
+      return p
+    }
+
+    const phase = (freq, zeros, poles) => {
+      // e^j⍵
+      const x = Math.cos(freq)
+      const y = Math.sin(freq)
+      let ph = 0
+
+      // ∠ (e^j⍵, pole)
+      for (let p of poles) {
+		if (p.mag >= 1) return [freq, 0]
+        ph += Math.atan2(x-p.x, y-p.y) * p.strength
+        ph += Math.atan2(x-p.x, y+p.y) * p.strength // conjugate
+      }
+
+      // ∠ (e^j⍵, zero)
+      for (let z of zeros) {
+        ph -= Math.atan2(x-z.x, y-z.y) * z.strength
+        ph -= Math.atan2(x-z.x, y+z.y) * z.strength // conjugate
+      }
+      return [freq, unwrap(ph)]
+    }
+
+    const multiply = (complex1, complex2) => {
+      // (a + bi)(c + di) = ac + bic + adi + bidi = (ac - bd) + (ad + bc)i
+      const [a, b] = complex1
+      const [c, d] = complex2
+      const re = a * c - b * d
+      const im = a * d + b * c
+      return [re, im]
+    }
+
+    const divide = (complex1, complex2) => {
+      // (a + bi)    (a + bi)(c - di)    (ac + bd) + (bc - ad)i
+      // --------- = ---------------- = -----------------------
+      // (c + di)    (c + di)(c - di)         c^2 + d^2
+      const [a, b] = complex1
+      const [c, d] = complex2
+      const re = (a * c + b * d) / (c * c + d * d)
+      const im = (b * c - a * d) / (c * c + d * d)
+      return [re, im]
+    }
+
+    // TODO: include strength
+    const transferFunction = (freq, zeros, poles) => {
+      //          (z - z1)(z - z2)...()
+      //  H(Z) = -----------------------
+      //          (z - p1)(z - p2)...()
+
+      // e^j⍵
+      const x = Math.cos(freq)
+      const y = -Math.sin(freq)
+
+      // initial values
+      const z = zeros[0]
+      let numerator = [x - z.x, y - z.y]
+
+      const p = poles[0]
+      let denominator =  [x - p.x, y - p.y]
+
+      for (let z of zeros.slice(1)) {
+        const c = x - z.x
+        const d = y - z.y
+        numerator = multiply(numerator, [c, d])
+      }
+
+      for (let p of poles.slice(1)) {
+        const c = x - z.x
+        const d = y - z.y
+        denominator = multiply(denominator, [c, d])
+      }
+
+      return divide(numerator, denominator)
+    }
+
+    // transfer function H -> inverse DFT -> impulse response
+    const impulseResponse = (time, freqs, zeros, poles) => {
+      const allZeros = [...zeros, ...zeros.map(conjugate)]
+      const allPoles = [...poles, ...poles.map(conjugate)]
+
+      // inverse DFT of transfer function
+      let re = 0, im = 0
+      for (const f of freqs) {
+        const c1 = [
+          Math.cos(2 * Math.PI * f * time),
+          -Math.sin(2 * Math.PI * f * time)
+        ]
+        const c2 = transferFunction(f, allZeros, allPoles)
+        const result = multiply(c1, c2)
+
+        // re += c1[0]
+        re += result[0]
+        // im += c1[1]
+        im +=result[1]
+
+        // console.log(f, value)
+        // console.log(re, im)
+      }
+
+      return (re + im) / freqs.length
+    }
+
+    const createClippingRect = (svg, id, width, height) => {
+      let defs = svg.select('defs')
+      if (defs.size() == 0) defs = svg.append('defs')
+      defs.append('clipPath').attr('id', id)
+        .append('rect')
+        .attr('width', width)
+        .attr('height', height)
+    }
+
+    const drawZero = (selection) =>{
+      selection.append('circle').attr('r', 7)
+      selection.append('text')
+        .classed('strength', true)
+        .attr('x', 10)
+    }
+
+    const drawPole = (selection) => {
+      selection.append('line')
+        .attr('x1', -6)
+        .attr('y1', -6)
+        .attr('x2', 6)
+        .attr('y2', 6)
+      selection.append('line')
+        .attr('x1', -6)
+        .attr('y1', 6)
+        .attr('x2', 6)
+        .attr('y2', -6)
+      selection.append('text')
+        .classed('strength', true)
+        .attr('x', 10)
+      // drag target
+      selection.append('rect')
+        .attr('x', -5)
+        .attr('y', -6)
+        .attr('width', 12)
+        .attr('height', 12)
+        .style('fill', 'transparent')
+    }
+
+    class Plot {
+      constructor({svgSelector, xdomain, ydomain, width, height, margin}) {
+        this.width = width
+        this.height = height
+        this.margin = margin
+        this.x = d3.scaleLinear().domain(xdomain).range([margin, width - margin])
+        this.y = d3.scaleLinear().domain(ydomain).range([margin, height - margin])
+        this.svg = d3.select(svgSelector)
+          .attr('width', width)
+          .attr('height', height)
+      }
+    }
+
+    const conjugateElement = (el) => {
+      if (el.classed('zero')) return '.conjugate-zero'
+      else if (el.classed('conjugate-zero')) return '.zero'
+      else if (el.classed('pole')) return '.conjugate-pole'
+      else if (el.classed('conjugate-pole')) return '.pole'
+    }
+
+    class PoleZeroPlot extends Plot {
+      constructor({onDrag, onAddPoint, onRemovePoint, onUpdatePoint, selectedZero, ...args}) {
+        super(args)
+        this.drawLayout()
+        this.origin = [this.x(0), this.y(0)]
+        this.pointer = [0, 0]
+
+        this.addMenu = document.querySelector('#add-menu')
+        this.editMenu = document.querySelector('#edit-menu')
+
+        this.addMenu.addEventListener('click', (e) => {
+          const init = e.target.dataset.choice === 'pole' ? pole : zero
+          const x = this.x.invert(this.pointer[0])
+          const y = this.y.invert(this.pointer[1])
+          this.addMenu.style.display = 'none'
+          onAddPoint(init(x, y, 1))
+        })
+
+        document.querySelector('#menu-remove').addEventListener('click', (e) => {
+          this.editMenu.style.display = 'none'
+          onRemovePoint(this.selected)
+        })
+
+        document.querySelector('#menu-strength').addEventListener('input', (e) => {
+          this.selected.strength = Number(e.target.value)
+          onUpdatePoint(this.selected)
+        })
+
+        this.svg.on('click', (e) => {
+          if (this.editMenu.style.display === 'block') {
+            this.editMenu.style.display = 'none'
+            return
+          }
+          if (this.addMenu.style.display === 'block') {
+            this.addMenu.style.display = 'none'
+            return
+          }
+          this.addMenu.style.display = 'block'
+          this.addMenu.style.top = `${e.y + 2}px`
+          this.addMenu.style.left = `${e.x + 2}px`
+          this.pointer = d3.pointer(e)
+        })
+
+        const self = this // workaround for d3 using `this` as target element :/
+
+        this.drag = d3.drag()
+          .on('start', function (e) {
+            self.editMenu.style.display = 'none'
+            self.addMenu.style.display = 'none'
+            e.sourceEvent.preventDefault()
+            d3.select(this).raise()
+          })
+          .on('drag', function (e, subject) {
+            const targetEl = d3.select(this)
+            const datum = targetEl.datum()
+            const newDatum = {...datum}
+            let {dx, dy} = e
+
+            const x = self.x(subject.x) + e.x
+            const y = snap(self.y(subject.y) + e.y, self.origin[1], 2)
+
+            newDatum.x = self.x.invert(x)
+            newDatum.y = self.y.invert(y)
+            newDatum.mag = newDatum.x * newDatum.x + newDatum.y * newDatum.y
+
+            targetEl
+              .attr('transform', `translate(${[x, self.y(newDatum.y)]})`)
+              .datum(newDatum)
+			  .classed('unstable', newDatum.mag > 1)
+
+            self.svg.selectAll(conjugateElement(targetEl))
+              .filter((d) => d.key === datum.key)
+              .datum({...newDatum, y: -newDatum.y})
+              .attr('transform', `translate(${[x, self.y(-newDatum.y)]})`)
+			  .classed('unstable', newDatum.mag > 1)
+
+            onDrag(newDatum)
+          })
+
+        this.selected = null
+      }
+
+      onClick(event, datum) {
+        event.stopPropagation()
+        this.selected = datum
+        this.addMenu.style.display = 'none'
+
+        this.editMenu.style.display = 'block'
+        this.editMenu.style.top = `${event.y + 2}px`
+        this.editMenu.style.left = `${event.x + 2}px`
+        document.querySelector('#menu-strength').value = datum.strength
+      }
+
+      drawPolesZeros(data) {
+        this.svg.selectAll('.zero')
+          .data(data.filter(d => d.type === 'zero'))
+          .join('g')
+            .classed('zero', true)
+            .call(drawZero)
+            .call(this.drag)
+            .attr('transform', d => `translate(${[this.x(d.x), this.y(d.y)]})`)
+            .on('click', (e, d) => this.onClick(e, d))
+            .select('.strength')
+              .text(d => d.strength)
+              .attr('visibility', d => d.strength > 1 ? 'inherit' : 'hidden')
+
+        this.svg.selectAll('.conjugate-zero')
+          .data(data.filter(d => d.type === 'zero'))
+          .join('g')
+            .datum(d => ({...d, y: -d.y}))
+            .classed('conjugate-zero', true)
+            .call(drawZero)
+            .call(this.drag)
+            .attr('transform', d => `translate(${[this.x(d.x), this.y(d.y)]})`)
+            .on('click', (e, d) => this.onClick(e, d))
+            .select('.strength')
+              .text(d => d.strength)
+              .attr('visibility', d => d.strength > 1 ? 'inherit' : 'hidden')
+
+        this.svg.selectAll('.pole')
+          .data(data.filter(d => d.type === 'pole'))
+          .join('g')
+            .classed('pole', true)
+            .call(drawPole)
+            .call(this.drag)
+            .attr('transform', d => `translate(${[this.x(d.x), this.y(d.y)]})`)
+            .on('click', (e, d) => this.onClick(e, d))
+            .select('.strength')
+              .text(d => d.strength)
+              .attr('visibility', d => d.strength > 1 ? 'inherit' : 'hidden')
+
+        this.svg.selectAll('.conjugate-pole')
+          .data(data.filter(d => d.type === 'pole'))
+          .join('g')
+            .datum(d => ({...d, y: -d.y}))
+            .classed('conjugate-pole', true)
+            .call(drawPole)
+            .call(this.drag)
+            .attr('transform', d => `translate(${[this.x(d.x), this.y(d.y)]})`)
+            .on('click', (e, d) => this.onClick(e, d))
+            .select('.strength')
+              .text(d => d.strength)
+              .attr('visibility', d => d.strength > 1 ? 'inherit' : 'hidden')
+      }
+
+      drawLayout() {
+        this.svg.append('ellipse')
+          .classed('unit-circle', true)
+          .attr('cx', this.x(0))
+          .attr('cy', this.y(0))
+          .attr('rx', this.x(1) - this.x(0))
+          .attr('ry', this.y(0) - this.y(1))
+
+        this.svg.append('g')
+          .classed('axis x-axis', true)
+          .attr('transform', `translate(${[0, this.y(0)]})`)
+          .call(d3.axisBottom(this.x).tickSize(0).tickValues([-1,1]))
+          .append('text').text('Re')
+            .attr('x', this.width)
+            .attr('x', this.width - this.margin)
+            .attr('dy', -6)
+
+        this.svg.append('g')
+          .classed('axis y-axis', true)
+          .attr('transform', `translate(${[this.x(0), 0]})`)
+          .call(d3.axisLeft(this.y).tickSize(0).tickValues([-1,1]))
+          .append('text').text('Im')
+            .attr('transform', 'rotate(-90)')
+            .attr('x', -this.margin)
+            .attr('y', 15)
+
+        this.svg.selectAll('.axis .tick')
+          .filter(d => d === 0 )
+          .remove()
+      }
+    }
+
+    class MagnitudePlot extends Plot {
+      constructor(args) {
+        super(args)
+        this.drawLayout()
+        this.y.clamp(true)
+        this.magnitudePath = this.svg.append('path')
+          .classed('magnitude', true)
+
+        this.magnitudeArea = this.svg.append('path')
+          .classed('magnitude-area', true)
+      }
+
+      drawLayout() {
+        this.svg.append('g')
+          .classed('axis x-axis', true)
+          .attr('transform', `translate(${[0, this.height - this.margin]})`)
+          .call(d3.axisBottom(this.x).tickSize(-this.height + 2 * this.margin).ticks(5))
+          .append('text').text('Frequency')
+            .attr('x', this.width/2)
+            .attr('y', 25)
+
+        this.svg.append('g')
+          .classed('axis y-axis', true)
+          .attr('transform', `translate(${[this.margin, 0]})`)
+          .call(d3.axisLeft(this.y).tickSize(-this.width + 2 * this.margin).ticks(5))
+
+        this.svg.selectAll('.tick').attr('stroke-dasharray', '1 2')
+      }
+
+      drawPath(data) {
+		const getMax = (a, b) => Math.max(a, b[1]);
+		var maxmag = data.reduce(getMax, 0)
+		//console.log(maxmag);
+		const data2 = data.map((x) => [x[0], x[1] / maxmag]);
+
+        const line = d3.line()
+          .x(d => this.x(d[0]))
+          .y(d => this.y(d[1]))
+        this.magnitudePath.attr('d', line(data2))
+
+        const area = d3.area()
+          .x0(d => this.x(d[0]))
+          .y1(d => this.y(d[1]))
+          .y0(d => this.y.range()[1])
+
+        this.magnitudeArea.attr('d', area(data2))
+      }
+    }
+
+    class PhasePlot extends Plot {
+      constructor(args) {
+        super(args)
+        this.drawLayout()
+        this.phasePath = this.svg.append('path').classed('phase', true)
+      }
+
+      drawPath(data) {
+        const line = d3.line()
+          .x(d => this.x(d[0]))
+          .y(d => this.y(d[1]))
+        this.phasePath.attr('d', line(data))
+      }
+
+      drawLayout() {
+        this.svg.append('g')
+          .classed('axis x-axis', true)
+          .attr('transform', `translate(${[0, this.height - this.margin]})`)
+          .call(d3.axisBottom(this.x).tickSize(-this.height + 2 * this.margin).ticks(5))
+          .append('text').text('Frequency')
+            .attr('x', this.width/2)
+            .attr('y', 25)
+
+        const labels = ['π', 'π/2', '0', '-π/2','-π']
+        this.svg.append('g')
+          .classed('axis y-axis', true)
+          .attr('transform', `translate(${[this.margin, 0]})`)
+          .call(d3.axisLeft(this.y)
+          .tickSize(-this.width + 2 * this.margin)
+          .tickValues(d3.range(Math.PI, -Math.PI-0.1, -Math.PI/2))
+          .tickFormat((d,i) => labels[i]))
+
+        this.svg.selectAll('.tick').attr('stroke-dasharray', '1 2')
+      }
+    }
+
+    class TimePlot extends Plot {
+      constructor(args) {
+        super(args)
+        this.drawLayout()
+        this.createPaths()
+        this.line = d3.line()
+          .x(d => this.x(d[0]))
+          .y(d => this.y(d[1]))
+        createClippingRect(this.svg, 'clip', this.width, this.height)
+      }
+
+      createPaths() {
+        this.path = this.svg.append('path')
+          .classed('response', true)
+          .attr('clip-path', 'url(#clip)')
+      }
+
+      drawLayout() {
+        this.svg.append('g')
+          .classed('axis x-axis', true)
+          .attr('transform', `translate(${[0, this.y(0)]})`)
+          .call(d3.axisBottom(this.x).ticks(5).tickSize(0))
+          .append('text').text('Time')
+            .attr('x', this.width - this.margin)
+            .attr('dy', -6)
+
+        this.svg.append('g')
+          .classed('axis y-axis', true)
+          .attr('transform', `translate(${[this.x(0), 0]})`)
+          .call(d3.axisLeft(this.y).ticks(5).tickSize(0))
+
+        this.svg.selectAll('.x-axis .tick')
+          .filter((d,i) => i === 0)
+          .remove()
+      }
+
+      drawPath(data) {
+        // const max = d3.max(data, (d) => Math.max(Math.abs(d[1]), Math.abs(d[2])))
+        // this.y.domain([max, -max])
+        // this.svg.select('.y-axis').call(d3.axisLeft(this.y).ticks(5).tickSize(0))
+        this.path.attr('d', this.line(data))
+      }
+    }
+
+    const margin = 30
+    const width = 400
+    const height = 400
+
+    const poleZero = new PoleZeroPlot({
+      svgSelector:'#pole-zero',
+      xdomain: [-1.5, 1.5],
+      ydomain: [1.5, -1.5],
+      width,
+      height,
+      margin,
+      onDrag: (target) => {
+        const i = data.findIndex(d => d.key === target.key)
+        data[i] = target
+        redrawOutput()
+      },
+      onAddPoint: (point) => {
+        data.push(point)
+        poleZero.drawPolesZeros(data)
+        redrawOutput()
+      },
+      onRemovePoint: (point) => {
+        const idx = data.findIndex(d => d.key === point.key)
+        data.splice(idx, 1)
+        poleZero.drawPolesZeros(data)
+        redrawOutput()
+      },
+      onUpdatePoint: (point) => {
+        const idx = data.findIndex(d => d.key === point.key)
+        data[idx] = point
+        poleZero.drawPolesZeros(data)
+        redrawOutput()
+      }
+    })
+
+    const magnitudePlot = new MagnitudePlot({
+      svgSelector:'#magnitude',
+      xdomain: [0, Math.PI],
+      ydomain: [1.1, 0],
+      width,
+      height,
+      margin,
+    })
+
+    const phasePlot = new PhasePlot({
+      svgSelector:'#phase',
+      xdomain: [0, Math.PI],
+      ydomain: [3.5, -3.5],
+      width,
+      height,
+      margin,
+    })
+
+    const timeInterval = [0, 10]
+    // const timePlot = new TimePlot({
+    //   svgSelector:'#timeplot',
+    //   xdomain: timeInterval,
+    //   ydomain: [1, -1],
+    //   width: 3*width,
+    //   height: 300,
+    //   margin,
+    // })
+
+    const time = d3.range(...timeInterval, 0.1)
+    const frequencies = d3.range(-Math.PI-0.01, Math.PI+0.01, 0.01)
+    const positiveFreqs = d3.range(0.0, Math.PI+0.01, 0.01)
+
+    const data = [
+      zero(-1, 0, 1),
+
+      pole(0.85441, 0.23288, 1),
+      // pole(0.4, 0.7, 1)
+
+      // zero(1, 0, 1),
+      // pole(0.6, 0.75, 1),
+      // pole(0.3, 0.8, 1),
+      // zero(-0.3, 0.8, 1),
+      // pole(0.5, 0, 1)
+      // pole(1.2, 0.0, 1)
+    ]
+    const selected = -1
+
+    poleZero.drawPolesZeros(data)
+
+    Array.prototype.max = function() {
+      return Math.max.apply(null, this);
+    };
+
+    const redrawOutput = () => {
+      const zeros = data.filter(d => d.type === 'zero')
+      const poles = data.filter(d => d.type === 'pole')
+      const magnitudeData = positiveFreqs.map(f => magnitude(f, zeros, poles))
+  
+      const phaseData = positiveFreqs.map(f => phase(f, zeros, poles))
+      // const timeData = time.map(t => [t, impulseResponse(t, frequencies, zeros, poles)])
+
+      magnitudePlot.drawPath(magnitudeData)
+      phasePlot.drawPath(phaseData)
+      // timePlot.drawPath(timeData)
+    }
+
+    redrawOutput()
+
+    document.querySelector('#clear-btn').addEventListener('click', () => {
+      data.length = 0
+      poleZero.drawPolesZeros(data)
+      redrawOutput()
+    })
+
+  </script>
+</body>
+</html>
